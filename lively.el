@@ -40,10 +40,10 @@
   (interactive "r")
   (when (null lively-timer)
     (lively-init-timer))
-  (add-to-list 'pre-command-hook #'lively-pre-command-hook)
-  (add-to-list 'post-command-hook #'lively-post-command-hook)
-  (push (make-overlay start end) lively-overlays)
-  (overlay-put (first lively-overlays) 'buffer (current-buffer)))
+  (add-hook 'pre-command-hook #'lively-pre-command-hook)
+  (add-hook 'post-command-hook #'lively-post-command-hook)
+  (push (make-overlay start end nil nil t) lively-overlays)
+  (overlay-put (first lively-overlays) 'name :lively))
 
 (defun lively-update ()
   "Update the display of all visible lively text."
@@ -59,11 +59,14 @@
   (delete-overlay o)
   (setq lively-overlays (remove o lively-overlays)))
 
+(defun lively-compute-overlay (o)
+  "Evaluate the value of the expression in a lively overlay."
+  (eval (read (buffer-substring (overlay-start o) (overlay-end o)))))
+
 (defun lively-update-overlay (o)
  "Update the text of O if it is both lively and visible."
   (with-current-buffer (overlay-buffer o)
-    (let ((expr (buffer-substring (overlay-start o) (overlay-end o))))
-      (overlay-put o 'display (format "%s" (eval (read expr)))))))
+    (overlay-put o 'display (format "%s" (lively-compute-overlay o)))))
 
 (defun lively-freeze-overlay (o)
   "Temporarily suspend a lively overlay and remove its text from
@@ -72,7 +75,8 @@
 See also `lively-thaw-overlay'."
   (when (find o lively-overlays)
     (setf lively-overlays (remove o lively-overlays))
-    (add-to-list 'lively-frozen-overlays o)
+    (add-to-list 'lively-frozen-overlays o)       (lively-update-overlay o)
+
     (overlay-put o 'display nil)))
 
 (defun lively-thaw-overlay (o)
@@ -97,11 +101,18 @@ See also `lively-freeze-overlay'."
      (lively-freeze-overlay o)
      (add-to-list 'lively-recent-overlays o))
    (dolist (o recent)
-     (unless (find o overlays-here)
+     (unless (or (find o overlays-here)
+                 ;; Don't thaw if it errors out
+                 (not (eq (overlay-get o 'name) :lively))
+                 (not (condition-case err
+                          (prog1 t
+                            (lively-compute-overlay o))
+                        (error
+                         (message "Error in lively expression: %S" err)
+                         nil))))
        (lively-thaw-overlay o)
        (setq lively-recent-overlays (remove o lively-recent-overlays))))
-   (dolist (o lively-overlays)
-     (lively-update-overlay o))))
+   (lively-update)))
 
 (defun lively-init-timer ()
   "Setup background timer to update lively text."
@@ -112,6 +123,8 @@ See also `lively-freeze-overlay'."
  (interactive)
  (when lively-timer (cancel-timer lively-timer))
  (setq lively-timer nil)
+ (remove-hook 'pre-command-hook #'lively-pre-command-hook)
+ (remove-hook 'post-command-hook #'lively-post-command-hook)
  (mapc 'delete-overlay (concatenate 'list
                                     lively-overlays
                                     lively-frozen-overlays))
