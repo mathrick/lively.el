@@ -3,8 +3,8 @@
 ;;; Copyright 2009 Luke Gorrie <luke@bup.co.nz>
 
 ;; Author: Luke Gorrie <luke@bup.co.nz>
-;; Version: 20120728.1413
-;; X-Original-Version: 0.1
+;; Modified by: Darius Bacon <darius@wry.me>, Maciej Katafiasz <mathrick@gmail.com>
+;; Version: 0.2
 
 ;;; Go to the end of any of the following lines and run `M-x lively'
 ;;;   Current time:      (current-time-string)
@@ -36,7 +36,7 @@
   (interactive "r")
   (when (null lively-timer)
     (lively-init-timer))
-  (push (make-overlay start end) lively-overlays))
+  (push (make-overlay (- end 1) end) lively-overlays))
 
 (defun lively-update ()
   "Update the display of all visible lively text."
@@ -46,7 +46,8 @@
       (condition-case err
           (lively-update-overlay o)
         (error (message "Error in lively expression: %S" err)
-               (lively-delete-overlay o))))))
+               ;(lively-delete-overlay o))))))
+               )))))
 
 (defun lively-delete-overlay (o)
   (delete-overlay o)
@@ -55,8 +56,13 @@
 (defun lively-update-overlay (o)
  "Update the text of O if it is both lively and visible."
   (with-current-buffer (overlay-buffer o)
-    (let ((expr (buffer-substring (overlay-start o) (overlay-end o))))
-      (overlay-put o 'display (format "%s" (eval (read expr)))))))
+    (save-excursion
+      (goto-char (overlay-end o))
+      (let ((expr (buffer-substring (progn (backward-sexp) (point))
+                                    (overlay-end o))))
+        (overlay-put o 'display (format "%s => %s" 
+                                        (buffer-substring (overlay-start o) (overlay-end o))
+                                        (eval (read expr))))))))
 
 (defun lively-init-timer ()
   "Setup background timer to update lively text." (setq lively-timer (run-with-timer 0 lively-interval 'lively-update)))
