@@ -4,7 +4,7 @@
 
 ;; Author: Luke Gorrie <luke@bup.co.nz>
 ;; Modified by: Darius Bacon <darius@wry.me>, Maciej Katafiasz <mathrick@gmail.com>
-;; Version: 0.2
+;; Version: 0.3
 
 ;;; Go to the end of any of the following lines and run `M-x lively'
 ;;;   Current time:      (current-time-string)
@@ -20,7 +20,11 @@
 
 (require 'cl)
 
-(defvar lively-overlays nil "List of all overlays representing lively text.")
+(defvar lively-overlays nil "List of active overlays representing lively text.")
+(defvar lively-frozen-overlays nil "List of lively overlays currently not updating.")
+(defvar lively-recent-overlays nil "List of lively overlays last known to contain point.")
+(make-variable-buffer-local 'lively-recent-overlays)
+
 (defvar lively-timer    nil "Idle timer for updating lively text.")
 (defvar lively-interval 0.25 "Idle time before lively text update in seconds.")
 
@@ -36,7 +40,10 @@
   (interactive "r")
   (when (null lively-timer)
     (lively-init-timer))
-  (push (make-overlay (- end 1) end) lively-overlays))
+  (add-to-list 'pre-command-hook #'lively-pre-command-hook)
+  (add-to-list 'post-command-hook #'lively-post-command-hook)
+  (push (make-overlay start end) lively-overlays)
+  (overlay-put (first lively-overlays) 'buffer (current-buffer)))
 
 (defun lively-update ()
   "Update the display of all visible lively text."
@@ -46,33 +53,68 @@
       (condition-case err
           (lively-update-overlay o)
         (error (message "Error in lively expression: %S" err)
-               ;(lively-delete-overlay o))))))
-               )))))
+               (lively-delete-overlay o))))))
 
 (defun lively-delete-overlay (o)
   (delete-overlay o)
- (setq lively-overlays (remove o lively-overlays)))
+  (setq lively-overlays (remove o lively-overlays)))
 
 (defun lively-update-overlay (o)
  "Update the text of O if it is both lively and visible."
   (with-current-buffer (overlay-buffer o)
-    (save-excursion
-      (goto-char (overlay-end o))
-      (let ((expr (buffer-substring (progn (backward-sexp) (point))
-                                    (overlay-end o))))
-        (overlay-put o 'display (format "%s => %s" 
-                                        (buffer-substring (overlay-start o) (overlay-end o))
-                                        (eval (read expr))))))))
+    (let ((expr (buffer-substring (overlay-start o) (overlay-end o))))
+      (overlay-put o 'display (format "%s" (eval (read expr)))))))
+
+(defun lively-freeze-overlay (o)
+  "Temporarily suspend a lively overlay and remove its text from
+  display, allowing it to be edited.
+
+See also `lively-thaw-overlay'."
+  (when (find o lively-overlays)
+    (setf lively-overlays (remove o lively-overlays))
+    (add-to-list 'lively-frozen-overlays o)
+    (overlay-put o 'display nil)))
+
+(defun lively-thaw-overlay (o)
+  "Unfreeze a previously frozen overlay.
+
+See also `lively-freeze-overlay'."
+  (when (find o lively-frozen-overlays)
+    (setf lively-frozen-overlays (remove o lively-frozen-overlays))
+    (add-to-list 'lively-overlays o)))
+
+(defun lively-pre-command-hook ()
+  "Hook to hide lively overlays right before a command, allowing
+  undisturbed movement."
+  (dolist (o lively-overlays)
+    (overlay-put o 'display nil)))
+
+(defun lively-post-command-hook ()
+  "Hook to restore lively overlays after a command."
+  (let ((overlays-here (overlays-at (point)))
+        (recent lively-recent-overlays))
+   (dolist (o overlays-here)
+     (lively-freeze-overlay o)
+     (add-to-list 'lively-recent-overlays o))
+   (dolist (o recent)
+     (unless (find o overlays-here)
+       (lively-thaw-overlay o)
+       (setq lively-recent-overlays (remove o lively-recent-overlays))))
+   (dolist (o lively-overlays)
+     (lively-update-overlay o))))
 
 (defun lively-init-timer ()
-  "Setup background timer to update lively text." (setq lively-timer (run-with-timer 0 lively-interval 'lively-update)))
+  "Setup background timer to update lively text."
+  (setq lively-timer (run-with-timer 0 lively-interval 'lively-update)))
 
 (defun lively-stop ()
  "Remove all lively regions in Emacs."
  (interactive)
  (when lively-timer (cancel-timer lively-timer))
  (setq lively-timer nil)
- (mapc 'delete-overlay lively-overlays)
+ (mapc 'delete-overlay (concatenate 'list
+                                    lively-overlays
+                                    lively-frozen-overlays))
  (setq lively-overlays nil))
 
 ;;; Nice to have:
